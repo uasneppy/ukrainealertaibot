@@ -3,6 +3,7 @@ import { EventEmitter } from "events";
 import readline from "readline";
 import path from "path";
 import { fileURLToPath } from "url";
+import { DATA_DIR, SETTINGS_PATH, OTP_PATH } from "./config.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,7 +22,11 @@ export class ParserBridge extends EventEmitter {
       stdio: ["pipe", "pipe", "inherit"],
       env: {
         ...process.env,
-        PYTHONUNBUFFERED: "1"
+        PYTHONUNBUFFERED: "1",
+        DATA_DIR,
+        SETTINGS_PATH,
+        OTP_PATH,
+        TELETHON_SESSION_PATH: path.join(DATA_DIR, "telegram_parser")
       }
     });
 
@@ -39,7 +44,13 @@ export class ParserBridge extends EventEmitter {
       if (!line.trim()) return;
       try {
         const payload = JSON.parse(line);
-        this.emit("message", payload);
+        if (payload.type === "message") {
+          this.emit("message", payload.data);
+        } else if (payload.type === "status") {
+          this.emit("status", payload);
+        } else {
+          this.emit("message", payload);
+        }
       } catch (err) {
         this.emit("error", new Error(`Failed to parse parser output: ${err.message}`));
       }
