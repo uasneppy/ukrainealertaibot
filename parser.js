@@ -4,6 +4,7 @@ import readline from "readline";
 import path from "path";
 import { fileURLToPath } from "url";
 import { DATA_DIR, SETTINGS_PATH, OTP_PATH } from "./config.js";
+import logger from "./logger.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,6 +14,7 @@ export class ParserBridge extends EventEmitter {
     super();
     this.channels = channels;
     this.process = null;
+    this.log = logger.child({ scope: "parser-bridge" });
   }
 
   start() {
@@ -30,8 +32,12 @@ export class ParserBridge extends EventEmitter {
       }
     });
 
-    this.process.on("error", (err) => this.emit("error", err));
+    this.process.on("error", (err) => {
+      this.log.error("Parser process failed to start", { error: err.message });
+      this.emit("error", err);
+    });
     this.process.on("exit", (code) => {
+      this.log.warn("Parser process exited", { code });
       this.emit("exit", code);
     });
 
@@ -46,22 +52,30 @@ export class ParserBridge extends EventEmitter {
         const payload = JSON.parse(line);
         if (payload.type === "message") {
           this.emit("message", payload.data);
+          this.log.debug("Forwarded parser message", {
+            channel: payload?.data?.channel,
+            id: payload?.data?.id
+          });
         } else if (payload.type === "status") {
           this.emit("status", payload);
+          this.log.info("Parser status event", payload);
         } else {
           this.emit("message", payload);
         }
       } catch (err) {
+        this.log.error("Failed to parse parser output", { error: err.message, line });
         this.emit("error", new Error(`Failed to parse parser output: ${err.message}`));
       }
     });
 
+    this.log.info("Passing channels to parser", { channels: this.channels.length });
     this.process.stdin.write(JSON.stringify(this.channels));
     this.process.stdin.end();
   }
 
   stop() {
     if (this.process) {
+      this.log.info("Stopping parser process");
       this.process.kill();
     }
   }

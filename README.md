@@ -8,6 +8,7 @@ Production-ready Telegram bot that monitors Ukrainian OSINT channels, analyzes n
 - Admins can update the analyst prompt, monitored regions, and Telethon login flow through Telegram commands.
 - Persistent JSON settings keep runtime configuration in `data/` without needing code edits.
 - Automatic parser restarts plus proactive admin notifications for OTP/phone/authorization states.
+- Structured JSON logging streams to `data/logs/bot.log` for postmortems and real-time debugging.
 
 ## Prerequisites
 - Node.js 18+
@@ -59,8 +60,16 @@ All commands require the chat ID to be listed in `TELEGRAM_ADMIN_CHAT_IDS` (fall
 
 Settings are written to `data/settings.json` automatically. Regions/prompts update instantly without restarting the bot. Channel changes can be applied by editing `data/settings.json` manually and restarting the Node.js process.
 
+## Logging
+- Logs are written to `data/logs/bot.log` by default. Tail the file while the bot runs:
+  ```bash
+  tail -f data/logs/bot.log
+  ```
+- Change verbosity with `LOG_LEVEL` in `.env` (`error`, `warn`, `info`, `debug`). Use `debug` whenever you need to trace why alerts are not firing—the log captures parser events, Gemini analysis results, filtering decisions, and delivery attempts.
+- Override the log location with `LOG_DIR` or `LOG_FILE` environment variables if you prefer a custom path.
+
 ## Testing
-Deterministic Vitest suites cover the threat-filtering utilities and dynamic settings store. Run them with:
+Deterministic Vitest suites cover the threat-filtering utilities, dynamic settings store, and structured logger. Run them with:
 ```bash
 npm test
 ```

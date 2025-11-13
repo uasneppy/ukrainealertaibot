@@ -1,10 +1,12 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { loadSettings } from "./config.js";
+import logger from "./logger.js";
 
 const MODEL_NAME = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
 let modelInstance = null;
 let lastPromptSignature = null;
+const aiLogger = logger.child({ scope: "gemini" });
 
 function getModel(systemInstruction) {
   if (!process.env.GEMINI_KEY) {
@@ -57,8 +59,19 @@ export async function analyzeMessage(text) {
 
   const { prompt } = loadSettings();
   const model = getModel(prompt);
-  const response = await model.generateContent([{ text }]);
-  const raw = response?.response?.text?.();
+  aiLogger.debug("Sending text to Gemini", {
+    length: text.length,
+    preview: text.slice(0, 120)
+  });
+
+  let raw;
+  try {
+    const response = await model.generateContent([{ text }]);
+    raw = response?.response?.text?.();
+  } catch (err) {
+    aiLogger.error("Gemini API call failed", { error: err.message });
+    throw err;
+  }
 
   if (!raw) {
     throw new Error("Gemini returned empty response");
@@ -68,8 +81,16 @@ export async function analyzeMessage(text) {
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
+    aiLogger.error("Gemini response is not valid JSON", { error: err.message, raw });
     throw new Error(`Gemini response is not valid JSON: ${err.message}`);
   }
 
-  return validateAnalysis(parsed);
+  const analysis = validateAnalysis(parsed);
+  aiLogger.info("Gemini analysis parsed", {
+    threat: analysis.threat,
+    threatType: analysis.threat_type,
+    locations: analysis.locations,
+    confidence: analysis.confidence
+  });
+  return analysis;
 }

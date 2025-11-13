@@ -12,6 +12,7 @@ import {
 } from "./config.js";
 import { hasRelevantLocation, isGlobalThreat, formatAlert } from "./utils.js";
 import { hasMessage, saveMessage } from "./db.js";
+import logger from "./logger.js";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -43,6 +44,16 @@ let lastParserStatus = { status: "init", message: "Парсер запускає
 const queue = [];
 let processing = false;
 
+const botLogger = logger.child({ scope: "bot" });
+const adminLogger = logger.child({ scope: "admin" });
+const queueLogger = logger.child({ scope: "queue" });
+const alertLogger = logger.child({ scope: "alerts" });
+
+botLogger.info("Bot runtime initialized", {
+  targetChats: TARGET_CHAT_IDS.length,
+  adminChats: ADMIN_CHAT_IDS.size || 0
+});
+
 startParser();
 registerAdminCommands();
 
@@ -53,9 +64,15 @@ function startParser() {
   }
 
   const { channels } = loadSettings();
+  botLogger.info("Spawning python parser", { channels: channels.length });
   parser = createParser(channels);
 
   parser.on("message", (message) => {
+    queueLogger.debug("Message received from parser", {
+      channel: message.channel,
+      id: message.id,
+      queueSize: queue.length + 1
+    });
     queue.push(message);
     processQueue();
   });
@@ -63,12 +80,12 @@ function startParser() {
   parser.on("status", handleParserStatus);
 
   parser.on("error", (err) => {
-    console.error("Parser error:", err);
+    botLogger.error("Parser error", { error: err.message });
     notifyAdmins(`Парсер повідомив про помилку: ${err.message}`);
   });
 
   parser.on("exit", (code) => {
-    console.warn(`Parser exited with code ${code}`);
+    botLogger.warn("Parser exited", { code });
     notifyAdmins(`Парсер вимкнувся з кодом ${code}. Автоматичний перезапуск.`);
     scheduleParserRestart();
   });
@@ -78,6 +95,7 @@ function scheduleParserRestart(delay = 5000) {
   if (restartTimeout) {
     return;
   }
+  botLogger.info("Scheduling parser restart", { delayMs: delay });
   restartTimeout = setTimeout(() => {
     restartTimeout = null;
     startParser();
@@ -86,6 +104,7 @@ function scheduleParserRestart(delay = 5000) {
 
 function handleParserStatus(status) {
   lastParserStatus = status;
+  botLogger.info("Parser status", status);
   if (status.status === "auth_status") {
     if (status.stage && status.stage !== lastAnnouncedStage) {
       lastAnnouncedStage = status.stage;
@@ -118,16 +137,20 @@ async function notifyAdmins(text) {
   const targets = ADMIN_CHAT_IDS.size ? [...ADMIN_CHAT_IDS] : [];
 
   if (targets.length === 0) {
-    console.log(`[ADMIN NOTICE] ${text}`);
+    botLogger.info("Admin notice broadcast skipped (no admin targets)", { text });
     return;
   }
 
+  adminLogger.info("Sending admin notification", {
+    text,
+    targets
+  });
   await Promise.all(
     targets.map(async (chatId) => {
       try {
         await bot.sendMessage(chatId, text);
       } catch (err) {
-        console.error(`Failed to notify admin ${chatId}:`, err.message);
+        adminLogger.error("Failed to notify admin", { chatId, error: err.message });
       }
     })
   );
@@ -136,6 +159,7 @@ async function notifyAdmins(text) {
 function registerAdminCommands() {
   bot.onText(/^\/help$/, (msg) => {
     if (!isAdmin(msg.chat.id)) return;
+    adminLogger.info("/help requested", { chatId: msg.chat.id });
     bot.sendMessage(
       msg.chat.id,
       [
@@ -155,12 +179,14 @@ function registerAdminCommands() {
   bot.onText(/^\/listregions$/, (msg) => {
     if (!isAdmin(msg.chat.id)) return;
     const { regions } = loadSettings();
+    adminLogger.info("/listregions", { chatId: msg.chat.id, totalRegions: regions.length });
     bot.sendMessage(msg.chat.id, `Моніторимо регіони:\n- ${regions.join("\n- ")}`);
   });
 
   bot.onText(/^\/prompt$/, (msg) => {
     if (!isAdmin(msg.chat.id)) return;
     const { prompt } = loadSettings();
+    adminLogger.info("/prompt requested", { chatId: msg.chat.id });
     bot.sendMessage(msg.chat.id, `Поточний промпт аналітика:\n${prompt}`);
   });
 
@@ -172,6 +198,7 @@ function registerAdminCommands() {
       return;
     }
     setPrompt(nextPrompt);
+    adminLogger.info("Prompt updated", { chatId: msg.chat.id, length: nextPrompt.length });
     bot.sendMessage(msg.chat.id, "Промпт оновлено. Нові аналізи використовуватимуть його автоматично.");
   });
 
@@ -180,10 +207,12 @@ function registerAdminCommands() {
     try {
       const region = match?.[1]?.trim();
       addRegion(region);
+      adminLogger.info("Region added", { chatId: msg.chat.id, region });
       const { regions } = loadSettings();
       bot.sendMessage(msg.chat.id, `Регіон додано. Поточний список:\n- ${regions.join("\n- ")}`);
     } catch (err) {
       bot.sendMessage(msg.chat.id, `Не вдалося додати регіон: ${err.message}`);
+      adminLogger.error("Failed to add region", { chatId: msg.chat.id, error: err.message });
     }
   });
 
@@ -192,10 +221,12 @@ function registerAdminCommands() {
     try {
       const region = match?.[1]?.trim();
       removeRegion(region);
+      adminLogger.info("Region removed", { chatId: msg.chat.id, region });
       const { regions } = loadSettings();
       bot.sendMessage(msg.chat.id, `Регіон видалено. Поточний список:\n- ${regions.join("\n- ")}`);
     } catch (err) {
       bot.sendMessage(msg.chat.id, `Не вдалося видалити регіон: ${err.message}`);
+      adminLogger.error("Failed to remove region", { chatId: msg.chat.id, error: err.message });
     }
   });
 
@@ -204,6 +235,7 @@ function registerAdminCommands() {
     try {
       const phone = match?.[1]?.trim();
       setPhoneNumber(phone);
+      adminLogger.info("Phone number stored", { chatId: msg.chat.id });
       bot.sendMessage(
         msg.chat.id,
         "Номер збережено. Перевірте Telegram — код підтвердження прийде автоматично. Потім скористайтеся /setotp."
@@ -218,9 +250,11 @@ function registerAdminCommands() {
     const code = match?.[1]?.replace(/\s+/g, "");
     try {
       recordOtp(code);
+      adminLogger.info("OTP recorded", { chatId: msg.chat.id });
       bot.sendMessage(msg.chat.id, "OTP збережено. Python-парсер продовжить авторизацію автоматично.");
     } catch (err) {
       bot.sendMessage(msg.chat.id, `Не вдалося прийняти OTP: ${err.message}`);
+      adminLogger.error("Failed to record OTP", { chatId: msg.chat.id, error: err.message });
     }
   });
 
@@ -228,6 +262,7 @@ function registerAdminCommands() {
     if (!isAdmin(msg.chat.id)) return;
     const statusText = lastParserStatus?.message || "Статус недоступний";
     const stage = lastParserStatus?.stage ? ` (етап: ${lastParserStatus.stage})` : "";
+    adminLogger.info("/status requested", { chatId: msg.chat.id, status: lastParserStatus?.status });
     bot.sendMessage(msg.chat.id, `Статус парсера: ${statusText}${stage}`);
   });
 }
@@ -238,6 +273,7 @@ async function processQueue() {
   }
 
   processing = true;
+  queueLogger.debug("Queue draining started", { backlog: queue.length });
 
   while (queue.length > 0) {
     const message = queue.shift();
@@ -247,37 +283,63 @@ async function processQueue() {
 
     try {
       if (hasMessage(messageKey)) {
+        queueLogger.debug("Skipping cached message", { messageKey });
         continue;
       }
 
       if (!message.text) {
+        queueLogger.warn("Incoming message without text", { messageKey });
         saveMessage(messageKey, message.channel, message.date);
         continue;
       }
 
       const analysis = await analyzeMessage(message.text);
+      queueLogger.info("Analysis result", {
+        messageKey,
+        threat: analysis.threat,
+        threatType: analysis.threat_type,
+        locations: analysis.locations,
+        confidence: analysis.confidence,
+        summary: analysis.summary
+      });
       if (analysis.threat) {
         const relevantLocation = hasRelevantLocation(analysis.locations, regions);
         const globalThreat = isGlobalThreat(analysis);
 
         if (globalThreat || relevantLocation) {
           const alert = formatAlert(analysis, message);
+          alertLogger.info("Broadcasting alert", {
+            messageKey,
+            relevantLocation,
+            globalThreat,
+            locations: analysis.locations,
+            threatType: analysis.threat_type,
+            summary: analysis.summary
+          });
           await broadcastAlert(alert);
+        } else {
+          queueLogger.debug("Threat not relevant for configured regions", {
+            messageKey,
+            locations: analysis.locations,
+            regions: regions.length,
+            summary: analysis.summary
+          });
         }
       }
 
       saveMessage(messageKey, message.channel, message.date);
     } catch (err) {
-      console.error(`Failed to process message ${messageKey}:`, err);
+      queueLogger.error("Failed to process message", { messageKey, error: err.message });
     }
   }
 
   processing = false;
+  queueLogger.debug("Queue draining finished");
 }
 
 async function broadcastAlert(alertText) {
   if (!TARGET_CHAT_IDS.length) {
-    console.log("Alert (not sent):\n" + alertText);
+    alertLogger.warn("No TELEGRAM_TARGET_CHAT_IDS configured. Alert logged only.");
     return;
   }
 
@@ -285,8 +347,9 @@ async function broadcastAlert(alertText) {
     TARGET_CHAT_IDS.map(async (chatId) => {
       try {
         await bot.sendMessage(chatId, alertText);
+        alertLogger.info("Alert delivered", { chatId });
       } catch (err) {
-        console.error(`Failed to send alert to ${chatId}:`, err.message);
+        alertLogger.error("Failed to send alert", { chatId, error: err.message });
       }
     })
   );
@@ -296,5 +359,6 @@ process.on("SIGINT", () => {
   if (parser) {
     parser.stop();
   }
+  botLogger.info("SIGINT received. Stopping bot gracefully.");
   process.exit(0);
 });
