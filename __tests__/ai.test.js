@@ -1,7 +1,7 @@
 /**
  * Summary:
  * - Modules: ai.js analyzeMessage helper.
- * - Behaviors: prompt wrapping, model caching, error handling, and JSON parsing validation.
+ * - Behaviors: prompt wrapping, model caching, structured text parsing, and error handling.
  * - Run with `npm test`.
  */
 import { beforeEach, describe, expect, it, vi, afterEach } from "vitest";
@@ -27,14 +27,12 @@ vi.mock("../config.js", async () => {
   };
 });
 
-const validGeminiResponse = {
-  threat: true,
-  threat_type: "missiles",
-  locations: ["Kyiv"],
-  summary: "Incoming missiles reported over Kyiv.",
-  timestamp: "2024-01-01T00:00:00Z",
-  confidence: 0.8
-};
+const validGeminiResponse = `Загроза: так
+Тип: missiles
+Локації: Київ
+Опис: Incoming missiles reported over Kyiv.
+Час: 2024-01-01T00:00:00Z
+Ймовірність: 80%`;
 
 let analyzeMessage;
 let resetGeminiModelCache;
@@ -49,7 +47,7 @@ beforeEach(async () => {
   process.env.GEMINI_KEY = "test-key";
   mockGenerateContent.mockResolvedValue({
     response: {
-      text: () => JSON.stringify(validGeminiResponse)
+      text: () => validGeminiResponse
     }
   });
   ({ analyzeMessage, resetGeminiModelCache } = await import("../ai.js"));
@@ -101,14 +99,38 @@ describe("analyzeMessage", () => {
     expect(mockGoogleGenerativeAI).not.toHaveBeenCalled();
   });
 
-  it("reports invalid JSON responses from Gemini", async () => {
+  it("parses structured Gemini responses into a normalized analysis", async () => {
+    const analysis = await analyzeMessage("Alert text");
+
+    expect(analysis).toEqual({
+      threat: true,
+      threat_type: "missiles",
+      locations: ["Київ"],
+      summary: "Incoming missiles reported over Kyiv.",
+      timestamp: "2024-01-01T00:00:00Z",
+      confidence: 0.8
+    });
+  });
+
+  it("reports invalid structured responses from Gemini", async () => {
     mockGenerateContent.mockResolvedValueOnce({
       response: {
         text: () => "not json"
       }
     });
 
-    await expect(analyzeMessage("Alert"))
-      .rejects.toThrow(/Gemini response is not valid JSON/);
+    await expect(analyzeMessage("Alert")).rejects.toThrow(/Gemini/);
+  });
+
+  it("supports percent-based confidence declarations", async () => {
+    mockGenerateContent.mockResolvedValueOnce({
+      response: {
+        text: () => `Загроза: ні\nТип: unknown\nЛокації: невідомо\nОпис: Test\nЧас: невідомо\nЙмовірність: 25%`
+      }
+    });
+
+    const analysis = await analyzeMessage("Alert");
+    expect(analysis.confidence).toBeCloseTo(0.25);
+    expect(analysis.threat).toBe(false);
   });
 });
