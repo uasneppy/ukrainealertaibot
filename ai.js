@@ -8,18 +8,39 @@ let modelInstance = null;
 let lastPromptSignature = null;
 const aiLogger = logger.child({ scope: "gemini" });
 
+function normalizePrompt(systemInstruction) {
+  return typeof systemInstruction === "string" ? systemInstruction.trim() : "";
+}
+
+function buildSystemInstruction(systemInstruction) {
+  const normalizedPrompt = normalizePrompt(systemInstruction);
+  if (!normalizedPrompt) {
+    throw new Error("Gemini system prompt is empty");
+  }
+
+  return {
+    role: "system",
+    parts: [{ text: normalizedPrompt }]
+  };
+}
+
 function getModel(systemInstruction) {
   if (!process.env.GEMINI_KEY) {
     throw new Error("GEMINI_KEY is not set. Please provide a valid Gemini API key.");
   }
 
-  if (!modelInstance || lastPromptSignature !== systemInstruction) {
+  const normalizedPrompt = normalizePrompt(systemInstruction);
+  if (!normalizedPrompt) {
+    throw new Error("Gemini system prompt is empty");
+  }
+
+  if (!modelInstance || lastPromptSignature !== normalizedPrompt) {
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_KEY);
     modelInstance = genAI.getGenerativeModel({
       model: MODEL_NAME,
-      systemInstruction
+      systemInstruction: buildSystemInstruction(normalizedPrompt)
     });
-    lastPromptSignature = systemInstruction;
+    lastPromptSignature = normalizedPrompt;
   }
 
   return modelInstance;
@@ -93,4 +114,9 @@ export async function analyzeMessage(text) {
     confidence: analysis.confidence
   });
   return analysis;
+}
+
+export function resetGeminiModelCache() {
+  modelInstance = null;
+  lastPromptSignature = null;
 }
