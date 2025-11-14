@@ -22,6 +22,17 @@ if not API_ID or not API_HASH:
 
 API_ID = int(API_ID)
 
+def _read_concurrency_env():
+  value = os.getenv("CHANNEL_RESOLUTION_CONCURRENCY", "5")
+  try:
+    parsed = int(value)
+  except (TypeError, ValueError):
+    return 5
+  return max(1, parsed)
+
+
+CHANNEL_RESOLUTION_CONCURRENCY = _read_concurrency_env()
+
 DATA_DIR = Path(os.getenv("DATA_DIR", Path(__file__).parent / "data"))
 SETTINGS_PATH = Path(os.getenv("SETTINGS_PATH", DATA_DIR / "settings.json"))
 OTP_PATH = Path(os.getenv("OTP_PATH", DATA_DIR / "otp.json"))
@@ -154,11 +165,12 @@ def channel_query_value(name, normalized=None):
   return normalized
 
 
-async def resolve_channel_filters(client, channels):
+async def resolve_channel_filters(client, channels, concurrency_limit=CHANNEL_RESOLUTION_CONCURRENCY):
   resolved_chats = []
   allowed_channels = set()
   skipped = []
   seen = set()
+  queue = []
 
   for raw_value in channels:
     normalized = normalize_channel(raw_value)
@@ -171,14 +183,25 @@ async def resolve_channel_filters(client, channels):
       skipped.append({"channel": raw_value, "reason": "Unsupported channel format"})
       continue
 
+    queue.append((raw_value, normalized, query_value))
+
+  if not queue:
+    return resolved_chats, allowed_channels, skipped
+
+  semaphore = asyncio.Semaphore(max(1, concurrency_limit))
+
+  async def resolve_single(raw_value, normalized, query_value):
     try:
-      entity = await client.get_input_entity(query_value)
+      async with semaphore:
+        entity = await client.get_input_entity(query_value)
     except (ValueError, UsernameNotOccupiedError, ChannelInvalidError, ChannelPrivateError, PeerIdInvalidError) as exc:
       skipped.append({"channel": raw_value, "reason": str(exc)})
-      continue
+      return
 
     resolved_chats.append(entity)
     allowed_channels.add(normalized)
+
+  await asyncio.gather(*(resolve_single(*entry) for entry in queue))
 
   return resolved_chats, allowed_channels, skipped
 
@@ -199,7 +222,10 @@ async def main():
   event_filter = events.NewMessage()
 
   if channels:
-    resolved_chats, allowed_channels, skipped_channels = await resolve_channel_filters(client, channels)
+    resolved_chats, allowed_channels, skipped_channels = await resolve_channel_filters(
+      client,
+      channels
+    )
 
     if skipped_channels:
       emit({
