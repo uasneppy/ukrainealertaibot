@@ -5,6 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { DATA_DIR, SETTINGS_PATH, OTP_PATH } from "./config.js";
 import logger from "./logger.js";
+import { buildChannelMatcher } from "./channel-filter.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,6 +16,7 @@ export class ParserBridge extends EventEmitter {
     this.channels = channels;
     this.process = null;
     this.log = logger.child({ scope: "parser-bridge" });
+    this.isChannelAllowed = buildChannelMatcher(channels);
   }
 
   start() {
@@ -51,6 +53,12 @@ export class ParserBridge extends EventEmitter {
       try {
         const payload = JSON.parse(line);
         if (payload.type === "message") {
+          if (!this.isChannelAllowed(payload?.data?.channel)) {
+            this.log.debug("Skipping message from non-whitelisted channel", {
+              channel: payload?.data?.channel
+            });
+            return;
+          }
           this.emit("message", payload.data);
           this.log.debug("Forwarded parser message", {
             channel: payload?.data?.channel,
