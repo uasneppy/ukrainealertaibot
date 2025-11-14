@@ -7,6 +7,12 @@ from pathlib import Path
 
 from telethon import TelegramClient, events
 from telethon.errors import SessionPasswordNeededError
+from telethon.errors.rpcerrorlist import (
+  ChannelInvalidError,
+  ChannelPrivateError,
+  PeerIdInvalidError,
+  UsernameNotOccupiedError
+)
 
 API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
@@ -112,29 +118,129 @@ async def authenticate(client):
   emit_ready("Parser authenticated and streaming")
 
 
+def strip_telegram_url(value):
+  lower_value = value.lower()
+  if "t.me/" not in lower_value:
+    return value
+  prefix_index = lower_value.find("t.me/")
+  truncated = value[prefix_index + len("t.me/") :]
+  truncated = truncated.split("?", 1)[0]
+  truncated = truncated.split("/", 1)[0]
+  return truncated
+
+
+def normalize_channel(name):
+  if name is None:
+    return None
+  value = str(name).strip()
+  if not value:
+    return None
+  value = strip_telegram_url(value)
+  while value.startswith("@"):
+    value = value[1:]
+  value = value.lower()
+  return value or None
+
+
+def channel_query_value(name, normalized=None):
+  normalized = normalized if normalized is not None else normalize_channel(name)
+  if not normalized:
+    return None
+  if normalized.lstrip("-").isdigit():
+    try:
+      return int(normalized)
+    except ValueError:
+      return normalized
+  return normalized
+
+
+async def resolve_channel_filters(client, channels):
+  resolved_chats = []
+  allowed_channels = set()
+  skipped = []
+  seen = set()
+
+  for raw_value in channels:
+    normalized = normalize_channel(raw_value)
+    if not normalized or normalized in seen:
+      continue
+    seen.add(normalized)
+
+    query_value = channel_query_value(raw_value, normalized)
+    if query_value is None:
+      skipped.append({"channel": raw_value, "reason": "Unsupported channel format"})
+      continue
+
+    try:
+      entity = await client.get_input_entity(query_value)
+    except (ValueError, UsernameNotOccupiedError, ChannelInvalidError, ChannelPrivateError, PeerIdInvalidError) as exc:
+      skipped.append({"channel": raw_value, "reason": str(exc)})
+      continue
+
+    resolved_chats.append(entity)
+    allowed_channels.add(normalized)
+
+  return resolved_chats, allowed_channels, skipped
+
+
 async def main():
   raw_input = sys.stdin.read().strip()
   channels = json.loads(raw_input) if raw_input else []
 
   client = TelegramClient(str(SESSION_PATH), API_ID, API_HASH)
 
-  @client.on(events.NewMessage(chats=channels or None))
-  async def handler(event):
-    message = event.message
-    chat = await event.get_chat()
-    payload = {
-      "id": str(message.id),
-      "channel": getattr(chat, "username", None) or getattr(chat, "title", None) or str(event.chat_id),
-      "text": message.message or "",
-      "date": message.date.isoformat()
-    }
-    emit({"type": "message", "data": payload})
-
   try:
     await authenticate(client)
   except Exception as exc:  # pragma: no cover - defensive
     emit_error(f"Не вдалося авторизуватися: {exc}")
     return
+
+  allowed_channels = set()
+  event_filter = events.NewMessage()
+
+  if channels:
+    resolved_chats, allowed_channels, skipped_channels = await resolve_channel_filters(client, channels)
+
+    if skipped_channels:
+      emit({
+        "type": "status",
+        "status": "channel_warning",
+        "message": "Деякі канали пропущено: перевірте налаштування",
+        "skippedChannels": skipped_channels
+      })
+
+    if not resolved_chats:
+      emit_error("Жодного валідного каналу не знайдено. Оновіть whitelist у налаштуваннях.")
+      return
+
+    event_filter = events.NewMessage(chats=resolved_chats)
+
+  @client.on(event_filter)
+  async def handler(event):
+    message = event.message
+    chat = await event.get_chat()
+    channel_name = getattr(chat, "username", None) or getattr(chat, "title", None) or str(getattr(chat, "id", None) or event.chat_id)
+
+    normalized_candidates = [
+      normalize_channel(getattr(chat, "username", None)),
+      normalize_channel(getattr(chat, "title", None)),
+      normalize_channel(getattr(chat, "first_name", None)),
+      normalize_channel(getattr(chat, "last_name", None)),
+      normalize_channel(getattr(chat, "id", None)),
+      normalize_channel(event.chat_id)
+    ]
+
+    if allowed_channels:
+      if not any(candidate in allowed_channels for candidate in normalized_candidates if candidate):
+        return
+
+    payload = {
+      "id": str(message.id),
+      "channel": channel_name,
+      "text": message.message or "",
+      "date": message.date.isoformat()
+    }
+    emit({"type": "message", "data": payload})
 
   await client.run_until_disconnected()
 
