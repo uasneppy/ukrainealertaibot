@@ -17,6 +17,37 @@ export function normalizeChannelName(name) {
   return trimmed.toLowerCase();
 }
 
+function collectCandidates(source) {
+  const candidates = [];
+
+  const pushCandidate = (value) => {
+    const normalized = normalizeChannelName(value);
+    if (normalized) {
+      candidates.push(normalized);
+    }
+  };
+
+  if (source && typeof source === "object" && !Array.isArray(source)) {
+    const { channel, channelId, channelUsername, channelCandidates } = source;
+    pushCandidate(channel);
+    pushCandidate(channelId);
+    pushCandidate(channelUsername);
+    if (Array.isArray(channelCandidates)) {
+      for (const candidate of channelCandidates) {
+        pushCandidate(candidate);
+      }
+    }
+  } else if (Array.isArray(source)) {
+    for (const value of source) {
+      pushCandidate(value);
+    }
+  } else {
+    pushCandidate(source);
+  }
+
+  return candidates;
+}
+
 export function buildChannelMatcher(channels = []) {
   const normalizedAllowed = new Set(
     (Array.isArray(channels) ? channels : [])
@@ -24,14 +55,14 @@ export function buildChannelMatcher(channels = []) {
       .filter(Boolean)
   );
 
-  return function isChannelAllowed(channelName) {
+  return function isChannelAllowed(channelMetadata) {
     if (normalizedAllowed.size === 0) {
       return true;
     }
-    const normalizedIncoming = normalizeChannelName(channelName);
-    if (!normalizedIncoming) {
+    const normalizedCandidates = collectCandidates(channelMetadata);
+    if (normalizedCandidates.length === 0) {
       return false;
     }
-    return normalizedAllowed.has(normalizedIncoming);
+    return normalizedCandidates.some((candidate) => normalizedAllowed.has(candidate));
   };
 }
