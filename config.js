@@ -50,7 +50,7 @@ export const DEFAULT_SETTINGS = {
     "Чернігів",
     "Чернігівська область"
   ],
-  channels: ["air_alert_ua", "deepstateua", "tpyxa_news"],
+  channels: ["air_alert_ua", "deepstateua"],
   phoneNumber: ""
 };
 
