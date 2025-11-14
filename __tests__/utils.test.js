@@ -5,7 +5,26 @@
  * - Run: npm test
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+const mockCities = vi.hoisted(() => [
+  {
+    country: "UA",
+    name: "Kyiv",
+    altName: "Київ,Kyiv City",
+    loc: { coordinates: [30.5234, 50.4501] }
+  },
+  {
+    country: "UA",
+    name: "Brovary",
+    altName: "Бровари",
+    loc: { coordinates: [30.7909, 50.5119] }
+  }
+]);
+
+vi.mock("all-the-cities", () => ({
+  default: mockCities
+}));
 import {
   hasRelevantLocation,
   isGlobalThreat,
