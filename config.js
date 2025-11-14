@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { normalizeChannelName } from "./channel-filter.js";
 
 export const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(process.cwd(), "data"));
 export const SETTINGS_PATH = process.env.SETTINGS_PATH || path.join(DATA_DIR, "settings.json");
@@ -62,6 +63,74 @@ function normalizeList(values, fallback) {
   return [...new Set(values.map((value) => String(value).trim()).filter(Boolean))];
 }
 
+function collectChannelCandidates(entry, push) {
+  if (entry === null || entry === undefined) {
+    return;
+  }
+
+  const pushNormalized = (value) => {
+    const normalized = normalizeChannelName(value);
+    if (normalized && !/\s/.test(normalized)) {
+      push(normalized);
+    }
+  };
+
+  if (Array.isArray(entry)) {
+    for (const nested of entry) {
+      collectChannelCandidates(nested, push);
+    }
+    return;
+  }
+
+  if (typeof entry === "object") {
+    const candidateArrays = [entry.channelCandidates, entry.candidates];
+    for (const candidateArray of candidateArrays) {
+      if (Array.isArray(candidateArray)) {
+        for (const candidate of candidateArray) {
+          pushNormalized(candidate);
+        }
+      }
+    }
+
+    const candidateKeys = [
+      "channelUsername",
+      "username",
+      "channelId",
+      "id",
+      "channel",
+      "name",
+      "value"
+    ];
+
+    for (const key of candidateKeys) {
+      if (key in entry) {
+        pushNormalized(entry[key]);
+      }
+    }
+
+    return;
+  }
+
+  pushNormalized(entry);
+}
+
+function normalizeChannels(values, fallback) {
+  const normalized = [];
+  if (Array.isArray(values)) {
+    for (const entry of values) {
+      collectChannelCandidates(entry, (candidate) => {
+        normalized.push(candidate);
+      });
+    }
+  }
+
+  if (normalized.length === 0) {
+    return [...fallback];
+  }
+
+  return [...new Set(normalized)];
+}
+
 function normalizeSettings(settings = {}) {
   return {
     prompt:
@@ -69,7 +138,7 @@ function normalizeSettings(settings = {}) {
         ? settings.prompt.trim()
         : DEFAULT_SETTINGS.prompt,
     regions: normalizeList(settings.regions, DEFAULT_SETTINGS.regions),
-    channels: normalizeList(settings.channels, DEFAULT_SETTINGS.channels),
+    channels: normalizeChannels(settings.channels, DEFAULT_SETTINGS.channels),
     phoneNumber: settings.phoneNumber ? String(settings.phoneNumber).trim() : ""
   };
 }

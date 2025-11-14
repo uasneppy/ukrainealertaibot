@@ -1,7 +1,8 @@
 /**
  * Summary:
  * - Modules: config.js dynamic settings store.
- * - Behaviors: default bootstrap, prompt/region mutations, OTP persistence.
+ * - Behaviors: default bootstrap, prompt/region mutations, OTP persistence,
+ *   legacy channel whitelist normalization.
  * - Run: npm test
  */
 
@@ -15,7 +16,15 @@ process.env.SETTINGS_PATH = path.join(TEST_DATA_DIR, "settings.json");
 process.env.OTP_PATH = path.join(TEST_DATA_DIR, "otp.json");
 
 const configModule = await import("../config.js");
-const { loadSettings, addRegion, removeRegion, setPrompt, setPhoneNumber, recordOtp, OTP_PATH } = configModule;
+const {
+  loadSettings,
+  addRegion,
+  removeRegion,
+  setPrompt,
+  setPhoneNumber,
+  recordOtp,
+  OTP_PATH
+} = configModule;
 
 function resetStore() {
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
@@ -60,5 +69,28 @@ describe("config store", () => {
     recordOtp("12345");
     const otpFile = JSON.parse(fs.readFileSync(OTP_PATH, "utf-8"));
     expect(otpFile.otp).toBe("12345");
+  });
+
+  it("normalizes legacy channel objects into usernames", () => {
+    const legacy = loadSettings();
+    legacy.channels = [
+      { channel: "@DeepStateUA" },
+      { channelId: "-10042", channel: "Display name" },
+      { channelCandidates: ["@Air_Alert_UA", "-10077777"] },
+      { username: "OperativnoZSU" },
+      null,
+      " https://t.me/monitoring_channel "
+    ];
+    fs.writeFileSync(process.env.SETTINGS_PATH, JSON.stringify(legacy, null, 2));
+
+    const settings = loadSettings();
+    expect(settings.channels).toEqual([
+      "deepstateua",
+      "-10042",
+      "air_alert_ua",
+      "-10077777",
+      "operativnozsu",
+      "monitoring_channel"
+    ]);
   });
 });
