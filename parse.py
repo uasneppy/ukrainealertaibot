@@ -206,6 +206,35 @@ async def resolve_channel_filters(client, channels, concurrency_limit=CHANNEL_RE
   return resolved_chats, allowed_channels, skipped
 
 
+async def emit_channel_resolution_warnings(client, channels):
+  if not channels:
+    return
+
+  try:
+    resolved_chats, _, skipped_channels = await resolve_channel_filters(client, channels)
+  except Exception as exc:  # pragma: no cover - defensive
+    logging.getLogger(__name__).warning("Channel validation failed", exc_info=exc)
+    emit({
+      "type": "status",
+      "status": "channel_warning",
+      "message": "Не вдалося перевірити whitelist каналів: див. логи"
+    })
+    return
+
+  if not resolved_chats:
+    emit_error("Жодного валідного каналу не знайдено. Оновіть whitelist у налаштуваннях.")
+    await client.disconnect()
+    return
+
+  if skipped_channels:
+    emit({
+      "type": "status",
+      "status": "channel_warning",
+      "message": "Деякі канали пропущено: перевірте налаштування",
+      "skippedChannels": skipped_channels
+    })
+
+
 async def main():
   raw_input = sys.stdin.read().strip()
   channels = json.loads(raw_input) if raw_input else []
@@ -218,28 +247,15 @@ async def main():
     emit_error(f"Не вдалося авторизуватися: {exc}")
     return
 
-  allowed_channels = set()
+  allowed_channels = {
+    normalized
+    for normalized in (normalize_channel(value) for value in channels)
+    if normalized
+  }
   event_filter = events.NewMessage()
 
   if channels:
-    resolved_chats, allowed_channels, skipped_channels = await resolve_channel_filters(
-      client,
-      channels
-    )
-
-    if skipped_channels:
-      emit({
-        "type": "status",
-        "status": "channel_warning",
-        "message": "Деякі канали пропущено: перевірте налаштування",
-        "skippedChannels": skipped_channels
-      })
-
-    if not resolved_chats:
-      emit_error("Жодного валідного каналу не знайдено. Оновіть whitelist у налаштуваннях.")
-      return
-
-    event_filter = events.NewMessage(chats=resolved_chats)
+    asyncio.create_task(emit_channel_resolution_warnings(client, channels))
 
   @client.on(event_filter)
   async def handler(event):
