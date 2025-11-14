@@ -1,7 +1,6 @@
 import "dotenv/config";
 import TelegramBot from "node-telegram-bot-api";
 import { createParser } from "./parser.js";
-import { analyzeMessage } from "./ai.js";
 import {
   loadSettings,
   setPrompt,
@@ -10,15 +9,8 @@ import {
   setPhoneNumber,
   recordOtp
 } from "./config.js";
-import {
-  hasRelevantLocation,
-  isGlobalThreat,
-  formatAlert,
-  computeKyivProximity
-} from "./utils.js";
-import { hasMessage, saveMessage } from "./db.js";
 import logger from "./logger.js";
-import { buildContextualMessage, rememberChannelMessage } from "./context-store.js";
+import { createMessageProcessor } from "./message-processor.js";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -47,13 +39,11 @@ let parser = null;
 let restartTimeout = null;
 let lastAnnouncedStage = null;
 let lastParserStatus = { status: "init", message: "Парсер запускається" };
-const queue = [];
-let processing = false;
-
 const botLogger = logger.child({ scope: "bot" });
 const adminLogger = logger.child({ scope: "admin" });
-const queueLogger = logger.child({ scope: "queue" });
+const ingestLogger = logger.child({ scope: "ingest" });
 const alertLogger = logger.child({ scope: "alerts" });
+const processIncomingMessage = createMessageProcessor({ broadcastAlert, logger });
 
 botLogger.info("Bot runtime initialized", {
   targetChats: TARGET_CHAT_IDS.length,
@@ -74,13 +64,11 @@ function startParser() {
   parser = createParser(channels);
 
   parser.on("message", (message) => {
-    queueLogger.debug("Message received from parser", {
+    ingestLogger.debug("Message received from parser", {
       channel: message.channel,
-      id: message.id,
-      queueSize: queue.length + 1
+      id: message.id
     });
-    queue.push(message);
-    processQueue();
+    processIncomingMessage(message);
   });
 
   parser.on("status", handleParserStatus);
@@ -271,79 +259,6 @@ function registerAdminCommands() {
     adminLogger.info("/status requested", { chatId: msg.chat.id, status: lastParserStatus?.status });
     bot.sendMessage(msg.chat.id, `Статус парсера: ${statusText}${stage}`);
   });
-}
-
-async function processQueue() {
-  if (processing || queue.length === 0) {
-    return;
-  }
-
-  processing = true;
-  queueLogger.debug("Queue draining started", { backlog: queue.length });
-
-  while (queue.length > 0) {
-    const message = queue.shift();
-    const settings = loadSettings();
-    const regions = settings.regions;
-    const messageKey = `${message.channel}:${message.id}`;
-
-    try {
-      if (hasMessage(messageKey)) {
-        queueLogger.debug("Skipping cached message", { messageKey });
-        continue;
-      }
-
-      if (!message.text) {
-        queueLogger.warn("Incoming message without text", { messageKey });
-        saveMessage(messageKey, message.channel, message.date);
-        continue;
-      }
-
-      const contextualizedText = buildContextualMessage(message.channel, message.text, message.date);
-      const analysis = await analyzeMessage(contextualizedText);
-      rememberChannelMessage(message.channel, message.text, message.date);
-      queueLogger.info("Analysis result", {
-        messageKey,
-        threat: analysis.threat,
-        threatType: analysis.threat_type,
-        locations: analysis.locations,
-        confidence: analysis.confidence,
-        summary: analysis.summary
-      });
-      if (analysis.threat) {
-        const relevantLocation = hasRelevantLocation(analysis.locations, regions);
-        const globalThreat = isGlobalThreat(analysis);
-
-        if (globalThreat || relevantLocation) {
-          const kyivProximity = computeKyivProximity(analysis.locations);
-          const alert = formatAlert(analysis, message, kyivProximity);
-          alertLogger.info("Broadcasting alert", {
-            messageKey,
-            relevantLocation,
-            globalThreat,
-            locations: analysis.locations,
-            threatType: analysis.threat_type,
-            summary: analysis.summary
-          });
-          await broadcastAlert(alert);
-        } else {
-          queueLogger.debug("Threat not relevant for configured regions", {
-            messageKey,
-            locations: analysis.locations,
-            regions: regions.length,
-            summary: analysis.summary
-          });
-        }
-      }
-
-      saveMessage(messageKey, message.channel, message.date);
-    } catch (err) {
-      queueLogger.error("Failed to process message", { messageKey, error: err.message });
-    }
-  }
-
-  processing = false;
-  queueLogger.debug("Queue draining finished");
 }
 
 async function broadcastAlert(alertText) {
