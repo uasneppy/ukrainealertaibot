@@ -22,9 +22,10 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.8.0",
+    "all-the-cities": "^3.1.0",
     "better-sqlite3": "^9.4.3",
     "dotenv": "^16.4.5",
-    "@google/generative-ai": "^0.8.0",
     "node-telegram-bot-api": "^0.64.0"
   },
   "devDependencies": {
