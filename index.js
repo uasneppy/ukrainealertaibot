@@ -10,9 +10,15 @@ import {
   setPhoneNumber,
   recordOtp
 } from "./config.js";
-import { hasRelevantLocation, isGlobalThreat, formatAlert } from "./utils.js";
+import {
+  hasRelevantLocation,
+  isGlobalThreat,
+  formatAlert,
+  computeKyivProximity
+} from "./utils.js";
 import { hasMessage, saveMessage } from "./db.js";
 import logger from "./logger.js";
+import { buildContextualMessage, rememberChannelMessage } from "./context-store.js";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -293,7 +299,9 @@ async function processQueue() {
         continue;
       }
 
-      const analysis = await analyzeMessage(message.text);
+      const contextualizedText = buildContextualMessage(message.channel, message.text, message.date);
+      const analysis = await analyzeMessage(contextualizedText);
+      rememberChannelMessage(message.channel, message.text, message.date);
       queueLogger.info("Analysis result", {
         messageKey,
         threat: analysis.threat,
@@ -307,7 +315,8 @@ async function processQueue() {
         const globalThreat = isGlobalThreat(analysis);
 
         if (globalThreat || relevantLocation) {
-          const alert = formatAlert(analysis, message);
+          const kyivProximity = computeKyivProximity(analysis.locations);
+          const alert = formatAlert(analysis, message, kyivProximity);
           alertLogger.info("Broadcasting alert", {
             messageKey,
             relevantLocation,

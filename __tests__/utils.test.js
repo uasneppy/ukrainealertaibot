@@ -1,12 +1,18 @@
 /**
  * Summary:
- * - Modules: utils.js (hasRelevantLocation, isGlobalThreat, formatAlert)
- * - Behaviors: location filtering, global threat overrides, alert formatting.
+ * - Modules: utils.js (hasRelevantLocation, isGlobalThreat, computeKyivProximity, formatAlert)
+ * - Behaviors: location filtering, global overrides, proximity math, alert formatting.
  * - Run: npm test
  */
 
 import { describe, it, expect } from "vitest";
-import { hasRelevantLocation, isGlobalThreat, formatAlert } from "../utils.js";
+import {
+  hasRelevantLocation,
+  isGlobalThreat,
+  formatAlert,
+  computeKyivProximity,
+  KYIV_WARNING_DISTANCE_KM
+} from "../utils.js";
 
 const REGIONS = ["Київ", "Харківська область", "Львів"];
 
@@ -59,5 +65,47 @@ describe("formatAlert", () => {
     expect(text).toContain("Регіон: Харківська область");
     expect(text).toContain("Ймовірність: 87%");
     expect(text).toContain("Канал: @testchannel");
+  });
+
+  it("appends Kyiv proximity details and warnings", () => {
+    const text = formatAlert(
+      {
+        threat_type: "Ракети",
+        locations: ["Київ"],
+        summary: "Фіксуємо рух в бік столиці",
+        confidence: 0.65
+      },
+      { channel: "alerts" },
+      {
+        distanceKm: 5.123,
+        matchedLocation: "Kyiv",
+        isCritical: true
+      }
+    );
+
+    expect(text).toContain("Відстань до центру Києва: 5.1 км");
+    expect(text).toContain("населений пункт: Kyiv");
+    expect(text).toContain(`⚠️ Ціль ближче ніж ${KYIV_WARNING_DISTANCE_KM} км до Києва!`);
+  });
+});
+
+describe("computeKyivProximity", () => {
+  it("returns null when none of the locations can be resolved", () => {
+    expect(computeKyivProximity(["невідомо"])).toBeNull();
+  });
+
+  it("detects settlements near Kyiv and remains non-critical above the threshold", () => {
+    const proximity = computeKyivProximity(["Бровари"]);
+    expect(proximity).not.toBeNull();
+    expect(proximity?.matchedLocation).toBe("Brovary");
+    expect(proximity?.distanceKm).toBeGreaterThan(KYIV_WARNING_DISTANCE_KM);
+    expect(proximity?.isCritical).toBe(false);
+  });
+
+  it("raises the critical flag when the location is within the 10 km zone", () => {
+    const proximity = computeKyivProximity(["Київ"]);
+    expect(proximity).not.toBeNull();
+    expect(proximity?.isCritical).toBe(true);
+    expect(proximity?.distanceKm).toBeLessThanOrEqual(KYIV_WARNING_DISTANCE_KM);
   });
 });
