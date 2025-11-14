@@ -56,13 +56,21 @@ describe("ParserBridge", () => {
     bridge.start();
     emitLine(spawnedProcess, {
       type: "message",
-      data: { channel: "DeepStateUA", id: "1", text: "Payload" }
+      data: {
+        channel: "DeepState UA",
+        channelUsername: "DeepStateUA",
+        channelCandidates: ["deepstateua"],
+        id: "1",
+        text: "Payload"
+      }
     });
     await flushAsync();
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledWith({
-      channel: "DeepStateUA",
+      channel: "DeepState UA",
+      channelUsername: "DeepStateUA",
+      channelCandidates: ["deepstateua"],
       id: "1",
       text: "Payload"
     });
@@ -76,10 +84,37 @@ describe("ParserBridge", () => {
     bridge.start();
     emitLine(spawnedProcess, {
       type: "message",
-      data: { channel: "other_channel", id: "10", text: "Ignored" }
+      data: {
+        channel: "other_channel",
+        channelId: "-100999",
+        channelCandidates: ["-100999"],
+        id: "10",
+        text: "Ignored"
+      }
     });
     await flushAsync();
 
     expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  it("relies on channel ids when titles differ", async () => {
+    const bridge = new ParserBridge(["-10042"]);
+    const onMessage = vi.fn();
+    bridge.on("message", onMessage);
+
+    bridge.start();
+    emitLine(spawnedProcess, {
+      type: "message",
+      data: {
+        channel: "Custom title",
+        channelId: "-10042",
+        channelCandidates: ["-10042"],
+        id: "20",
+        text: "Payload"
+      }
+    });
+    await flushAsync();
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
   });
 });

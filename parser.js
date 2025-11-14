@@ -53,9 +53,11 @@ export class ParserBridge extends EventEmitter {
       try {
         const payload = JSON.parse(line);
         if (payload.type === "message") {
-          if (!this.isChannelAllowed(payload?.data?.channel)) {
+          const channelMetadata = payload?.data || null;
+          if (!this.isChannelAllowed(channelMetadata)) {
             this.log.debug("Skipping message from non-whitelisted channel", {
-              channel: payload?.data?.channel
+              channel: payload?.data?.channel,
+              channelId: payload?.data?.channelId
             });
             return;
           }

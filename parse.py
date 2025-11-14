@@ -276,9 +276,21 @@ async def main():
       if not any(candidate in allowed_channels for candidate in normalized_candidates if candidate):
         return
 
+    channel_id = getattr(chat, "id", None) or event.chat_id
+    channel_username = getattr(chat, "username", None)
+    candidate_values = []
+    seen_candidates = set()
+    for candidate in normalized_candidates:
+      if candidate and candidate not in seen_candidates:
+        seen_candidates.add(candidate)
+        candidate_values.append(candidate)
+
     payload = {
       "id": str(message.id),
       "channel": channel_name,
+      "channelId": str(channel_id) if channel_id is not None else None,
+      "channelUsername": channel_username,
+      "channelCandidates": candidate_values,
       "text": message.message or "",
       "date": message.date.isoformat()
     }

@@ -1,7 +1,8 @@
 /**
  * Summary:
  * - Modules: channel-filter.js (normalizeChannelName, buildChannelMatcher)
- * - Behaviors: channel normalization and whitelist filtering for parser bridge.
+ * - Behaviors: channel normalization and whitelist filtering for parser bridge, including
+ *   matching by usernames, ids and normalized candidate arrays.
  * - Run: npm test
  */
 
@@ -50,5 +51,38 @@ describe("buildChannelMatcher", () => {
   it("matches urls in whitelist", () => {
     const urlMatcher = buildChannelMatcher(["https://t.me/deepstateua"]);
     expect(urlMatcher("@DeepStateUA"), "URL whitelists should be normalized").toBe(true);
+  });
+
+  it("accepts structured metadata when ids differ from titles", () => {
+    const metadataMatcher = buildChannelMatcher(["-100123456"]);
+    const messageMetadata = {
+      channel: "Повітряна тривога",
+      channelId: "-100123456",
+      channelCandidates: ["-100123456", "povitryana-trivoga"],
+    };
+    expect(
+      metadataMatcher(messageMetadata),
+      "should match channel id when username/title differ"
+    ).toBe(true);
+  });
+
+  it("falls back to candidates array when other identifiers missing", () => {
+    const candidateMatcher = buildChannelMatcher(["deepstateua"]);
+    const messageMetadata = {
+      channelCandidates: [null, "DeepStateUA"],
+    };
+    expect(
+      candidateMatcher(messageMetadata),
+      "should match using candidate list"
+    ).toBe(true);
+  });
+
+  it("rejects metadata without usable identifiers", () => {
+    const candidateMatcher = buildChannelMatcher(["deepstateua"]);
+    const messageMetadata = { channelCandidates: [] };
+    expect(
+      candidateMatcher(messageMetadata),
+      "should reject when no identifiers exist"
+    ).toBe(false);
   });
 });
